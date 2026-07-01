@@ -1,12 +1,8 @@
 from flask import Flask, jsonify
 import os
-import psycopg2
-import redis
 
 app = Flask(__name__)
 
-# Read connection info from environment variables — NOT hardcoded.
-# This is the 12-factor principle: config comes from the environment.
 DB_HOST = os.environ.get("DB_HOST", "db")
 DB_NAME = os.environ.get("DB_NAME", "appdb")
 DB_USER = os.environ.get("DB_USER", "appuser")
@@ -24,7 +20,7 @@ def health():
 
 @app.route("/db")
 def db_check():
-    # Connect to Postgres using the service name 'db' as the host
+    import psycopg2                      # imported only when this route is hit
     conn = psycopg2.connect(host=DB_HOST, dbname=DB_NAME,
                             user=DB_USER, password=DB_PASS)
     cur = conn.cursor()
@@ -36,9 +32,9 @@ def db_check():
 
 @app.route("/visits")
 def visits():
-    # Connect to Redis using the service name 'cache' as the host
+    import redis                          # imported only when this route is hit
     r = redis.Redis(host=REDIS_HOST, port=6379)
-    count = r.incr("visits")  # atomically increment a counter
+    count = r.incr("visits")
     return jsonify(visits=count)
 
 if __name__ == "__main__":

@@ -1,0 +1,52 @@
+name: CI/CD Pipeline
+
+# WHEN this runs: on every push to main, and on pull requests
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # JOB 1: run the tests
+  test:
+    runs-on: ubuntu-latest        # the runner: a fresh Ubuntu VM
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4   # pulls your repo onto the runner
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -v
+
+  # JOB 2: build and push the image — only AFTER tests pass
+  build-and-push:
+    needs: test                   # dependency: waits for 'test' to succeed
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write             # needed to push to GHCR
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}   # auto-provided, no setup
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.actor }}/devops-app:latest
