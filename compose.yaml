@@ -1,0 +1,29 @@
+services:
+  web:
+    build: .                      # build from the Dockerfile in this directory
+    ports:
+      - "8090:5000"               # host:container, same as -p before
+    environment:
+      DB_HOST: db                 # matches the service name below
+      DB_NAME: appdb
+      DB_USER: appuser
+      DB_PASS: secret
+      REDIS_HOST: cache
+    depends_on:
+      - db
+      - cache
+
+  db:
+    image: postgres:16            # pull official Postgres, don't build
+    environment:
+      POSTGRES_DB: appdb
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - pgdata:/var/lib/postgresql/data   # persist DB data in a named volume
+
+  cache:
+    image: redis:7                # pull official Redis
+
+volumes:
+  pgdata:                         # declare the named volume
