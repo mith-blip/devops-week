@@ -12,6 +12,7 @@ A hands-on, free-of-cost DevOps learning log built around a single running proje
 - [Day 2 — Docker Compose (App + Postgres + Redis)](#day-2--docker-compose-app--postgres--redis)
 - [Day 3 — CI/CD with GitHub Actions](#day-3--cicd-with-github-actions)
 - [Day 4 — Artifact Management: Registries & Nexus OSS](#day-4--artifact-management-registries--nexus-oss)
+- [Day 5 — Kubernetes Core: Pods, Deployments, Services](#day-5--kubernetes-core-pods-deployments-services)
 - [Cross-cutting lessons learned](#cross-cutting-lessons-learned-the-debugging-that-taught-the-most)
 
 ---
@@ -223,6 +224,167 @@ docker push localhost:8082/devops-app:1.0.0
 
 ---
 
+## Day 5 — Kubernetes Core: Pods, Deployments, Services
+
+### Concepts — why Kubernetes exists
+
+Docker runs containers; **Kubernetes orchestrates them** across a cluster of machines — running many copies, restarting crashed ones, replacing them without downtime, scaling under load, and providing a stable network address even as containers come and go.
+
+The core mental model: **Kubernetes is declarative.** You do not say "start this container" (imperative). You declare the *desired state* ("I want 3 copies running") and Kubernetes continuously works to make actual state match. This **reconciliation loop** is the heart of Kubernetes — if a pod dies, it notices desired (3) ≠ actual (2) and creates a replacement.
+
+### The objects
+
+- **Pod** — smallest deployable unit; wraps one or more containers sharing network and storage. Pods are **ephemeral and disposable**: created, destroyed, and replaced constantly, each with a new IP. Never rely on a specific pod.
+- **Deployment** — the object you actually use. Maintains a desired replica count, handles rolling updates, recreates dead pods. Creates a **ReplicaSet** that does the pod-counting.
+- **Service** — a stable network endpoint (fixed name/IP) that load-balances across matching pods. It finds pods via **label selectors**, not IPs — which is why it survives pod replacement.
+
+Relationship: **Deployment manages Pods; Service routes traffic to Pods via labels.**
+
+### Cluster setup (Minikube + kubectl)
+
+```bash
+minikube start --driver=docker
+kubectl get nodes          # expect one node, status Ready
+kubectl cluster-info
+```
+
+`kubectl` talks to the cluster's API server (the front door to Kubernetes) via a kubeconfig file.
+
+### Making the image reachable by the cluster
+
+Minikube cannot see the host's local Docker images by default. Two options:
+
+- **Option A** — use the public GHCR image (`ghcr.io/<username>/devops-app:v1`), after setting the package visibility to **Public** in GitHub Packages.
+- **Option B** — `minikube image load devops-app:v1` to copy the local image into the cluster (add `imagePullPolicy: IfNotPresent`).
+
+### Deployment manifest (`k8s/deployment.yaml`)
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-app
+  labels:
+    app: devops-app
+spec:
+  replicas: 3                      # desired state: 3 identical pods
+  selector:
+    matchLabels:
+      app: devops-app              # this Deployment manages pods with this label
+  template:
+    metadata:
+      labels:
+        app: devops-app            # pod label MUST match the selector above
+    spec:
+      containers:
+        - name: devops-app
+          image: ghcr.io/<username>/devops-app:v1
+          ports:
+            - containerPort: 5000
+          livenessProbe:           # restart the pod if this fails
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:          # no traffic until this passes
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+```
+
+The label linkage (`selector.matchLabels` = `template.metadata.labels`) is how the Deployment knows which pods it owns — a common interview question. The `/health` endpoint from Day 1 now powers the probes.
+
+**Liveness vs readiness:** liveness = *should this pod be restarted?*; readiness = *should this pod receive traffic?* This is the proper solution to the "readiness" gap that `depends_on` could not solve in Day 2.
+
+### Service manifest (`k8s/service.yaml`)
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: devops-app-service
+spec:
+  type: NodePort
+  selector:
+    app: devops-app                # routes to pods with this label
+  ports:
+    - port: 80                     # the service's own port
+      targetPort: 5000             # container port to forward to
+```
+
+**Service types to know:**
+
+- **ClusterIP** (default) — reachable only inside the cluster (e.g. internal databases).
+- **NodePort** — opens a port on the node for external access; good for local testing.
+- **LoadBalancer** — provisions an external cloud load balancer; for production on cloud.
+
+### Applying and observing
+
+```bash
+kubectl apply -f k8s/deployment.yaml
+kubectl apply -f k8s/service.yaml
+kubectl get deployments
+kubectl get pods                   # watch ContainerCreating -> Running
+kubectl get services
+```
+
+`ImagePullBackOff` almost always means the GHCR package is not public, or the image name is wrong.
+
+### Self-healing demo (the one that sells Kubernetes)
+
+```bash
+kubectl get pods
+kubectl delete pod <pod-name>
+kubectl get pods                   # a NEW replacement pod appears within seconds
+```
+
+Deleting a pod drops actual state to 2 while desired is 3, so the Deployment immediately creates a replacement — the reconciliation loop, demonstrated.
+
+### Reaching the app + load balancing
+
+```bash
+minikube service devops-app-service --url
+curl.exe <printed-url>             # refresh repeatedly
+```
+
+The `hostname` field in the JSON rotates across the three pods — visual proof the Service is load-balancing.
+
+### Essential debugging commands
+
+```bash
+kubectl describe pod <pod-name>    # status + Events (why it failed) — primary debug tool
+kubectl logs <pod-name>            # application logs
+kubectl exec -it <pod-name> -- bash
+kubectl get all
+```
+
+Debugging a stuck pod: `kubectl describe pod` (read the Events) → `kubectl logs` (application errors).
+
+### Scaling
+
+```bash
+kubectl scale deployment devops-app --replicas=5
+```
+
+Change the desired number; Kubernetes reconciles. In production you edit the YAML (declarative, version-controlled) rather than using imperative `scale`.
+
+### Interview questions
+
+1. Why Kubernetes over plain Docker? (orchestration: scaling, self-healing, rolling updates, stable networking)
+2. What do "declarative" and the reconciliation loop mean?
+3. Pod vs Deployment vs ReplicaSet?
+4. Why are pods ephemeral? (constant recreation, new IP each time)
+5. How does a Service find its pods? (label selectors, not IPs)
+6. ClusterIP vs NodePort vs LoadBalancer?
+7. Liveness vs readiness probe? (restart-me vs send-me-traffic)
+8. How do you debug a failing pod? (`describe` → Events, then `logs`)
+9. How does Kubernetes self-heal? (reconciliation replaces dead pods)
+
+---
+
 ## Cross-cutting lessons learned (the debugging that taught the most)
 
 Real environment friction produced the most transferable lessons:
@@ -238,4 +400,4 @@ Real environment friction produced the most transferable lessons:
 
 ---
 
-*Next: Day 5 — Kubernetes core (pods, deployments, services on Minikube), Day 6 — ConfigMaps, secrets, ingress, scaling, rolling updates, and Day 7 — the full capstone pipeline plus interview prep.*
+*Next: Day 6 — Kubernetes advanced (ConfigMaps, secrets, ingress, scaling, rolling updates) and Day 7 — the full capstone pipeline (GitHub → CI → registry → Kubernetes) plus interview prep.*

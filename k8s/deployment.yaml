@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devops-app                 # name of this Deployment
+  labels:
+    app: devops-app
+spec:
+  replicas: 3                      # DESIRED state: 3 identical pods
+  selector:
+    matchLabels:
+      app: devops-app              # this Deployment manages pods with this label
+  template:                        # the pod "blueprint" below
+    metadata:
+      labels:
+        app: devops-app            # pods get this label (must match selector above)
+    spec:
+      containers:
+        - name: devops-app
+          image: ghcr.io/mith-blip/devops-app:v1
+          ports:
+            - containerPort: 5000  # the port the app listens on inside the pod
+          livenessProbe:           # K8s restarts the pod if this fails
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:          # K8s won't send traffic until this passes
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
